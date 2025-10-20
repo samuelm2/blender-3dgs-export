@@ -1,26 +1,59 @@
 # blender-exporter-colmap
 
-Blender plugin which generates a dataset for colmap by exporting blender camera poses and rendering scene.
+Blender addon which generates a dataset for COLMAP by exporting Blender camera poses and rendering scene images. Features a dedicated UI panel for easy access and configuration.
+
+## Features
+
+- 🎨 **Dedicated Properties Panel** - Access all export settings from the Output Properties panel
+- 📷 **Camera Management** - Automatically detects and exports all cameras in your scene
+- 🎯 **Multiple Formats** - Export as text (.txt) or binary (.bin) COLMAP formats
+- 🖼️ **Optional Rendering** - Choose to render images or export camera data only
+- ✅ **User-Friendly** - Clear status messages and progress indicators
+
+## Installation
+
+1. Download this repository as a ZIP file (or use the pre-built release)
+2. Open Blender
+3. Go to `Edit` > `Preferences` > `Add-ons`
+4. Click `Install...` and select the ZIP file
+5. Enable the addon by checking the box next to "Render: COLMAP Exporter"
+
+The COLMAP Export panel will now appear in the Properties Editor under Output Properties.
 
 ## How to use
 
-You can generate a dataset for colmap in below steps.
+You can generate a dataset for COLMAP in the following steps:
 
-### 1. Place cameras on the scene
+### 1. Place cameras in your scene
 
-You can place cameras on the scene as you like.
+Add and position cameras in your scene as needed. The addon will automatically detect all camera objects.
 
 ![Place cameras on the scene](docs/images/00_how_to_use/01_place_cameras_in_scene.png)
 
-### 2. Export your scene as dataset
+### 2. Open the COLMAP Export panel
 
-From menu, execute this extension. ([File] -> [Export] -> [Colmap dataset])
+1. Open the **Properties Editor** (usually on the right side of Blender)
+2. Click on the **Output Properties** icon (the printer icon 🖨️)
+3. Scroll down to find the **"COLMAP Export"** panel
+4. The panel shows the number of cameras in your scene
 
-![Export menu](docs/images/00_how_to_use/02_export.png)
+### 3. Configure export settings
 
-### 3. You can get dataset for SfM
+- **Output Directory**: Choose where to save your COLMAP dataset
+- **Format**: Select Text (.txt) or Binary (.bin) format
+- **Render Images**: Toggle whether to render images from each camera
 
-You can get cameras on scene exported as dataset on specified path. 
+### 4. Export your dataset
+
+Click the **"Export Dataset"** button. The addon will:
+- Export camera intrinsic parameters to `cameras.txt/bin`
+- Export camera poses to `images.txt/bin`  
+- Render images to the `images/` folder (if enabled)
+- Display a progress bar during export
+
+### 5. Your COLMAP dataset is ready
+
+You'll get a complete COLMAP dataset in your specified output directory: 
 
 ![Exported dataset](docs/images/00_how_to_use/03_exported_files.png)
 
