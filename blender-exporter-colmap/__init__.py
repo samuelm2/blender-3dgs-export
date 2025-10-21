@@ -364,8 +364,10 @@ class COLMAP_OT_export(bpy.types.Operator):
             filename = f'{cam.name_full}.jpg'
             
             print(f"[COLMAP Export]   - Extracting camera parameters...")
-            width = scene.render.resolution_x
-            height = scene.render.resolution_y
+            # Get actual render dimensions (accounting for resolution scale)
+            scale = scene.render.resolution_percentage / 100.0
+            width = int(scene.render.resolution_x * scale)
+            height = int(scene.render.resolution_y * scale)
             focal_length = cam.data.lens
             sensor_width = cam.data.sensor_width
             sensor_height = cam.data.sensor_height
