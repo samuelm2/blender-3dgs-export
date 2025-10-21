@@ -63,16 +63,16 @@ class ColmapExportSettings(bpy.types.PropertyGroup):
         default=False
     )
     
-    points_samples_per_face: bpy.props.IntProperty(
-        name="Samples Per Face",
-        description="Number of points to sample per face (triangle)",
-        default=3,
+    points_total_samples: bpy.props.IntProperty(
+        name="Total Samples",
+        description="Total number of points to sample across all mesh surfaces",
+        default=10000,
         min=1,
-        max=100
+        max=1000000
     )
 
 
-def extract_3d_points_from_scene(context, selected_only=False, sample_faces=False, samples_per_face=3):
+def extract_3d_points_from_scene(context, selected_only=False, sample_faces=False, total_samples=10000):
     """Extract 3D points from mesh objects in the scene"""
     points3D = {}
     point_id = 1
@@ -82,6 +82,8 @@ def extract_3d_points_from_scene(context, selected_only=False, sample_faces=Fals
         mesh_objects = [obj for obj in context.selected_objects if obj.type == 'MESH']
     else:
         mesh_objects = [obj for obj in context.scene.objects if obj.type == 'MESH']
+
+    print(f"[COLMAP Export] Mesh objects: {mesh_objects}")
     
     if not mesh_objects:
         return points3D
@@ -120,61 +122,41 @@ def extract_3d_points_from_scene(context, selected_only=False, sample_faces=Fals
                         break
         
         if sample_faces:
-            # Sample points across faces
+            # Collect all triangles with metadata for area-weighted sampling
             mesh.calc_loop_triangles()
             
+            triangles_data = []
             for tri in mesh.loop_triangles:
-                # Get triangle vertices
+                # Get triangle vertices in world space
                 v0 = world_matrix @ mesh.vertices[tri.vertices[0]].co
                 v1 = world_matrix @ mesh.vertices[tri.vertices[1]].co
                 v2 = world_matrix @ mesh.vertices[tri.vertices[2]].co
                 
-                # Sample points using barycentric coordinates
-                for _ in range(samples_per_face):
-                    # Random barycentric coordinates
-                    r1 = np.random.random()
-                    r2 = np.random.random()
-                    
-                    # Ensure point is inside triangle
-                    if r1 + r2 > 1.0:
-                        r1 = 1.0 - r1
-                        r2 = 1.0 - r2
-                    
-                    r3 = 1.0 - r1 - r2
-                    
-                    # Interpolate position
-                    world_pos = r1 * v0 + r2 * v1 + r3 * v2
-                    xyz = np.array([world_pos.x, world_pos.y, world_pos.z])
-                    
-                    # Interpolate color if available
-                    if has_vertex_colors:
-                        # Get vertex colors for this triangle
-                        colors = []
-                        for loop_idx in tri.loops:
-                            loop = mesh.loops[loop_idx]
-                            color = color_layer.data[loop.index].color
-                            colors.append(np.array([color[0], color[1], color[2]]))
-                        
-                        # Interpolate color using barycentric coordinates
-                        interpolated_color = r1 * colors[0] + r2 * colors[1] + r3 * colors[2]
-                        rgb = np.array([
-                            int(interpolated_color[0] * 255),
-                            int(interpolated_color[1] * 255),
-                            int(interpolated_color[2] * 255)
-                        ], dtype=np.uint8)
-                    else:
-                        rgb = default_color
-                    
-                    # Create Point3D entry
-                    points3D[point_id] = Point3D(
-                        id=point_id,
-                        xyz=xyz,
-                        rgb=rgb,
-                        error=0.0,
-                        image_ids=np.array([], dtype=int),
-                        point2D_idxs=np.array([], dtype=int)
-                    )
-                    point_id += 1
+                # Calculate triangle area
+                edge1 = v1 - v0
+                edge2 = v2 - v0
+                area = 0.5 * edge1.cross(edge2).length
+                
+                # Get colors for this triangle if available
+                tri_colors = None
+                if has_vertex_colors:
+                    tri_colors = []
+                    for loop_idx in tri.loops:
+                        loop = mesh.loops[loop_idx]
+                        color = color_layer.data[loop.index].color
+                        tri_colors.append(np.array([color[0], color[1], color[2]]))
+                
+                triangles_data.append({
+                    'vertices': (v0, v1, v2),
+                    'area': area,
+                    'colors': tri_colors,
+                    'default_color': default_color
+                })
+            
+            # Store for later (we'll sample after collecting all meshes)
+            if not hasattr(extract_3d_points_from_scene, '_all_triangles'):
+                extract_3d_points_from_scene._all_triangles = []
+            extract_3d_points_from_scene._all_triangles.extend(triangles_data)
         else:
             # Extract vertices only
             for i, vert in enumerate(mesh.vertices):
@@ -215,6 +197,74 @@ def extract_3d_points_from_scene(context, selected_only=False, sample_faces=Fals
         # Clean up
         obj_eval.to_mesh_clear()
     
+    # After processing all meshes, sample points from collected triangles
+    if sample_faces and hasattr(extract_3d_points_from_scene, '_all_triangles'):
+        all_triangles = extract_3d_points_from_scene._all_triangles
+        
+        if all_triangles:
+            # Calculate total area and cumulative areas for weighted sampling
+            areas = np.array([tri['area'] for tri in all_triangles])
+            total_area = areas.sum()
+            
+            if total_area > 0:
+                # Normalize areas to get probabilities
+                probabilities = areas / total_area
+                
+                # Sample triangles proportionally to their area
+                num_samples = min(total_samples, len(all_triangles) * 100)  # Cap at 100 points per triangle max
+                sampled_indices = np.random.choice(
+                    len(all_triangles),
+                    size=num_samples,
+                    p=probabilities,
+                    replace=True
+                )
+                
+                # Generate points
+                for tri_idx in sampled_indices:
+                    tri_data = all_triangles[tri_idx]
+                    v0, v1, v2 = tri_data['vertices']
+                    
+                    # Random barycentric coordinates
+                    r1 = np.random.random()
+                    r2 = np.random.random()
+                    
+                    # Ensure point is inside triangle
+                    if r1 + r2 > 1.0:
+                        r1 = 1.0 - r1
+                        r2 = 1.0 - r2
+                    
+                    r3 = 1.0 - r1 - r2
+                    
+                    # Interpolate position
+                    world_pos = r1 * v0 + r2 * v1 + r3 * v2
+                    xyz = np.array([world_pos.x, world_pos.y, world_pos.z])
+                    
+                    # Interpolate color if available
+                    if tri_data['colors']:
+                        colors = tri_data['colors']
+                        interpolated_color = r1 * colors[0] + r2 * colors[1] + r3 * colors[2]
+                        rgb = np.array([
+                            int(interpolated_color[0] * 255),
+                            int(interpolated_color[1] * 255),
+                            int(interpolated_color[2] * 255)
+                        ], dtype=np.uint8)
+                    else:
+                        rgb = tri_data['default_color']
+                    
+                    # Create Point3D entry
+                    points3D[point_id] = Point3D(
+                        id=point_id,
+                        xyz=xyz,
+                        rgb=rgb,
+                        error=0.0,
+                        image_ids=np.array([], dtype=int),
+                        point2D_idxs=np.array([], dtype=int)
+                    )
+                    point_id += 1
+        
+        # Clear the stored triangles for next run
+        extract_3d_points_from_scene._all_triangles = []
+    
     return points3D
 
 
@@ -246,7 +296,7 @@ class COLMAP_OT_export(bpy.types.Operator):
     _export_points = None
     _points_selected_only = None
     _points_sample_faces = None
-    _points_samples_per_face = None
+    _points_total_samples = None
     _cameras_data = {}
     _images_data = {}
     _points3D_data = {}
@@ -524,12 +574,12 @@ class COLMAP_OT_export(bpy.types.Operator):
             
             # Extract 3D points if enabled
             if self._export_points:
-                print(f"[COLMAP Export] Extracting 3D points (selected_only={self._points_selected_only}, sample_faces={self._points_sample_faces}, samples_per_face={self._points_samples_per_face})...")
+                print(f"[COLMAP Export] Extracting 3D points (selected_only={self._points_selected_only}, sample_faces={self._points_sample_faces}, total_samples={self._points_total_samples})...")
                 self._points3D_data = extract_3d_points_from_scene(
                     context, 
                     self._points_selected_only,
                     self._points_sample_faces,
-                    self._points_samples_per_face
+                    self._points_total_samples
                 )
                 print(f"[COLMAP Export] Extracted {len(self._points3D_data)} 3D points")
             
@@ -596,7 +646,7 @@ class COLMAP_OT_export(bpy.types.Operator):
             self._export_points = settings.export_points
             self._points_selected_only = settings.points_selected_only
             self._points_sample_faces = settings.points_sample_faces
-            self._points_samples_per_face = settings.points_samples_per_face
+            self._points_total_samples = settings.points_total_samples
             self._cameras_data = {}
             self._images_data = {}
             self._points3D_data = {}
@@ -704,7 +754,7 @@ class COLMAP_PT_export_panel(bpy.types.Panel):
             # Sample count sub-option
             if settings.points_sample_faces:
                 row = subcol.row()
-                row.prop(settings, "points_samples_per_face")
+                row.prop(settings, "points_total_samples")
         
         layout.separator()
         
